@@ -302,12 +302,32 @@ Loads your trained policy and runs it in the simulator to evaluate performance.
 ```bash
 # Inside the container
 python scripts/rollout.py \
-    --task=HCIS-CupStacking-SingleArm-v0 \
-    --policy_type=lerobot-diffusion \
-    --policy_checkpoint_path=checkpoints/my_policy \
+    --task=<eval_task_file> \
+    --policy_type=lerobot-<policy_name> \
+    --policy_checkpoint_path=<path/to/checkpoint> \
+    --policy_action_horizon=1 \
     --device=cuda \
-    --enable_cameras
+    --enable_cameras \
+    --eval_rounds=<num_rounds> \
+    --episode_length_s=20
 ```
+
+Placeholders:
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `<eval_task_file>` | Path to an evaluation task file under `eval/` (see table below) |
+| `<policy_name>` | LeRobot policy variant — e.g. `diffusion`, `act`, `pi0` (full flag becomes `lerobot-diffusion`, etc.) |
+| `<path/to/checkpoint>` | Local path to the trained policy checkpoint directory |
+| `<num_rounds>` | Number of evaluation episodes to roll out |
+
+Pick `--task` from the evaluation task files under `eval/`:
+
+| Task | Eval file |
+|------|-----------|
+| Cup stacking | `eval/cup_stacking_eval.py` |
+| Cutlery arrangement | `eval/cutlery_arrangement_eval.py` |
+| Toy blocks collection | `eval/toy_blocks_collection_eval` |
 
 For the full procedure including model download and flag reference, see [LeRobot Rollout (Policy Evaluation)](lerobot_rollout.md).
 
