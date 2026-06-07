@@ -40,8 +40,15 @@ parser.add_argument("--resume", action="store_true", help="Whether to resume rec
 parser.add_argument(
     "--object_poses",
     type=str,
-    required=True,
+    # required=True,
+    default=None,
     help="Path to the per-episode object_poses.json (UMI schema). Episode count = number of status=='full' entries.",
+)
+parser.add_argument(
+    "--num_episodes",
+    type=int,
+    default=1,
+    help="Number of synthetic episodes when --object_poses is not provided.",
 )
 parser.add_argument("--quality", action="store_true", help="Whether to enable quality render mode.")
 parser.add_argument("--use_lerobot_recorder", action="store_true", help="Whether to use lerobot recorder.")
@@ -69,6 +76,7 @@ from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
 from simulator.datagen.state_machine.cup_stacking import CupStackingStateMachine
 from simulator.datagen.state_machine.cutlery_arrangement import CutleryArrangementStateMachine
 from simulator.datagen.state_machine.toy_blocks_collection import ToyBlocksCollectionStateMachine
+from simulator.datagen.state_machine.advanced import AdvancedStateMachine
 from simulator.utils.object_poses_loader import load_episode_poses
 
 # Maps gym task id → (StateMachineClass, device_type)
@@ -77,6 +85,7 @@ TASK_REGISTRY = {
     "HCIS-CupStacking-SingleArm-v0": (CupStackingStateMachine, "keyboard"),
     "HCIS-ToyBlocksCollection-SingleArm-v0": (ToyBlocksCollectionStateMachine, "keyboard"),
     "HCIS-CutleryArrangement-SingleArm-v0": (CutleryArrangementStateMachine, "keyboard"),
+    "HCIS-Advanced-SingleArm-v0": (AdvancedStateMachine, "keyboard"),
 }
 
 
@@ -181,6 +190,27 @@ def _replace_recorder_manager(env, env_cfg, args_cli):
         env.recorder_manager = StreamingRecorderManager(env_cfg.recorders, env)
         env.recorder_manager.flush_steps = 100
         env.recorder_manager.compression = "lzf"
+
+
+def _make_synthetic_episodes(env_cfg, num_episodes: int) -> list[dict]:
+    """Build synthetic episodes that carry no pose override.
+
+    Each episode is an *empty* dict, so _apply_episode_poses is a no-op and
+    domain_randomization (registered in __post_init__ of the env cfg) handles
+    all per-episode position variety at env.reset() time.
+
+    Requirements on the env cfg
+    ----------------------------
+    * RigidObjectCfg fields must have init_state.pos set so that
+      domain_randomization has a sensible reference position to perturb.
+    * domain_randomization must be registered in __post_init__; without it
+      every episode will be identical (same init_state position).
+    """
+    print(
+        f"[synthetic] Building {num_episodes} episode(s) with no pose override. "
+        "Object positions will be set by domain_randomization at each env.reset()."
+    )
+    return [{} for _ in range(num_episodes)]
 
 
 def _apply_episode_poses(env, poses):
@@ -297,17 +327,26 @@ def main():
     env_cfg.use_teleop_device(device)
     env_cfg.seed = args_cli.seed if args_cli.seed is not None else int(time.time())
 
-    if getattr(env_cfg, "object_pose_cfg", None) is None:
-        raise ValueError(
-            f"Task '{task_name}' env_cfg has no 'object_pose_cfg' attribute; "
-            "cannot resolve anchor frame for --object_poses."
+    if args_cli.object_poses is not None:
+        if getattr(env_cfg, "object_pose_cfg", None) is None:
+            raise ValueError(
+                f"Task '{task_name}' env_cfg has no 'object_pose_cfg' attribute; "
+                "cannot resolve anchor frame for --object_poses."
+            )
+        episodes = load_episode_poses(args_cli.object_poses, env_cfg.object_pose_cfg)
+        if not episodes:
+            raise ValueError(
+                f"No 'status==full' episodes in {args_cli.object_poses}; nothing to replay."
+            )
+        print(f"Loaded {len(episodes)} replay episodes from {args_cli.object_poses}")
+    else:
+        # ── Synthetic path: build fixed-pose episodes from scene init_state ──
+        episodes = _make_synthetic_episodes(env_cfg, args_cli.num_episodes)
+        print(
+            f"No --object_poses provided. "
+            f"Running {len(episodes)} synthetic episode(s) from scene init_state."
         )
-    episodes = load_episode_poses(args_cli.object_poses, env_cfg.object_pose_cfg)
-    if not episodes:
-        raise ValueError(
-            f"No 'status==full' episodes in {args_cli.object_poses}; nothing to replay."
-        )
-    print(f"Loaded {len(episodes)} replay episodes from {args_cli.object_poses}")
+
 
     is_direct_env = "Direct" in task_name
     _configure_env_cfg(env_cfg, args_cli, is_direct_env, output_dir, output_file_name)

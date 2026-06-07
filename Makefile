@@ -100,7 +100,7 @@ launch-isaaclab: build-isaaclab
 # ---- Launch: GlowsAI RTX 4090 (VNC display :1) ------------------------------
 launch-isaaclab-glowsai-4090: build-isaaclab
 	@set -e; \
-	docker run --rm -it \
+	docker run -it \
 		--name $(CONTAINER_NAME)-glowsai-4090 \
 		--gpus '"device=0"' \
 		--net=host \
