@@ -139,7 +139,10 @@ def _configure_env_cfg(env_cfg, args_cli, is_direct_env, output_dir, output_file
         if hasattr(env_cfg.terminations, "time_out"):
             env_cfg.terminations.time_out = None
         if hasattr(env_cfg.terminations, "success"):
-            env_cfg.terminations.success = None
+            # env_cfg.terminations.success = None
+            env_cfg.terminations.success = TerminationTermCfg(
+                func=lambda env: torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+            )
 
     if args_cli.record:
         if args_cli.use_lerobot_recorder:

@@ -6,7 +6,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.utils.seed import configure_seed
 
 from isaaclab.assets import AssetBaseCfg, RigidObject, RigidObjectCfg
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import EventTermCfg, SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sim.schemas import MassPropertiesCfg
 from isaaclab.utils import configclass
@@ -50,19 +50,52 @@ PER_OBJECT_YAW_OFFSET: dict[str, float] = {
     "Worn_Rieker_Leather_Shoe": 0.0,
 }
 
-# 各鞋子的預設初始位置（只有 ACTIVE_SHOES 裡的鞋子才會進場景）
+# 各鞋子的起始中心位置（側倒）
 _SHOE_ACTIVE_POS: dict[str, tuple[float, float, float]] = {
-    "Sneaker":                  (0.45, -0.10, 0.12),
-    "Blue_Sneaker":             (0.55, -0.10, 0.12),
-    "Worn_Rieker_Leather_Shoe": (0.65, -0.10, 0.12),
+    "Sneaker":                  (0.36, -0.21, 0.1),
+    "Blue_Sneaker":             (0.55, -0.10, 0.1),
+    "Worn_Rieker_Leather_Shoe": (0.65, -0.10, 0.1),
 }
-
-# 翻扣姿態（繞 X 軸 180°，local +Y 朝下 = 鞋面朝下）
-# 若你的 USD up-axis 不是 +Y，請視情況調整
-_SHOE_UPSIDE_DOWN_ROT: tuple[float, float, float, float] = (0.0, 1.0, 0.0, 0.0)
-
-
+ 
+_Q_LEFT_SIDEWAY: tuple[float, float, float, float]  = (0.5,  0.5,  0.5, -0.5)
+_Q_RIGHT_SIDEWAY: tuple[float, float, float, float] = (0.5,  0.5, -0.5,  0.5)
+ 
+ 
 configure_seed(42)
+
+
+# ---------------------------------------------------------------------------
+# 自訂 reset event（與 env_cfg 共用相同邏輯）
+# ---------------------------------------------------------------------------
+def _randomize_shoe_sideways(
+    env,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    center_pos: tuple[float, float, float],
+    pos_range: dict[str, tuple[float, float]],
+) -> None:
+    """Reset shoe to left‑side or right‑side orientation with random position offset."""
+    asset = env.scene[asset_cfg.name]
+    n = len(env_ids)
+ 
+    pos = torch.tensor(list(center_pos), device=env.device, dtype=torch.float32)
+    pos = pos.unsqueeze(0).expand(n, -1).clone()
+    for dim, key in enumerate(("x", "y", "z")):
+        if key in pos_range:
+            lo, hi = pos_range[key]
+            pos[:, dim] += torch.rand(n, device=env.device) * (hi - lo) + lo
+    pos = pos + env.scene.env_origins[env_ids]
+ 
+    # ── 姿態：隨機選 +90° 或 -90° 繞 Y ───────────────────────────────────
+    q_left = torch.tensor(_Q_LEFT_SIDEWAY, device=env.device, dtype=torch.float32)
+    q_right = torch.tensor(_Q_RIGHT_SIDEWAY, device=env.device, dtype=torch.float32)
+    choose_left = (torch.rand(n, device=env.device) > 0.5).unsqueeze(1).expand(n, 4)
+    rot = torch.where(choose_left,
+                      q_left.unsqueeze(0).expand(n, -1),
+                      q_right.unsqueeze(0).expand(n, -1)).contiguous()
+ 
+    pose = torch.cat([pos, rot], dim=-1)
+    asset.write_root_pose_to_sim(pose, env_ids=env_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +128,7 @@ def _build_scene_cfg() -> type:
             ),
             init_state=RigidObjectCfg.InitialStateCfg(
                 pos=_SHOE_ACTIVE_POS[name],
-                rot=_SHOE_UPSIDE_DOWN_ROT,
+                rot=_Q_LEFT_SIDEWAY,   # 第一幀預設左倒；reset 後由 event 覆蓋
             ),
         )
         attrs["__annotations__"][name] = RigidObjectCfg
@@ -109,39 +142,34 @@ AdvancedSceneCfg = _build_scene_cfg()
 
 
 # ---------------------------------------------------------------------------
-# Success criterion
+# 成功條件：local +Z 的 world-Z 分量 >= min_up_z
+# 正立 ≈ 1.0 ✓ │ 側倒 ≈ 0.0 ✗ │ 倒扣 ≈ -1.0 ✗
 # ---------------------------------------------------------------------------
-
 def shoes_upright(
     env,
     shoe_cfgs: list[SceneEntityCfg],
-    min_up_y: float,
+    min_up_z: float,
 ) -> torch.Tensor:
-    """所有 active 鞋子的 local +Z 在 world frame 的 z 分量 >= min_up_y 時成功。
-
-    假設鞋子 USD 以 local +Z 為「正面朝上」的軸。
-    若 USD 使用不同 up-axis，請調整公式：
-    """
     done = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
     for cfg in shoe_cfgs:
         obj: RigidObject = env.scene[cfg.name]
-        q = obj.data.root_quat_w          # (N, 4) wxyz
+        q = obj.data.root_quat_w
         w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-        up_y = 2.0 * (y * z + w * x)
-        done = torch.logical_and(done, up_y >= min_up_y)
+        up_z = 1.0 - 2.0 * (x * x + y * y)   # R[2,2] = world-Z of local +Z
+        done = torch.logical_and(done, up_z >= min_up_z)
     return done
-
-
+ 
+ 
 @configclass
 class TerminationsCfg(SingleArmFrankaTerminationsCfg):
     success = DoneTerm(
         func=shoes_upright,
         params={
-            # 自動根據 ACTIVE_SHOES 生成，不需手動改這裡
             "shoe_cfgs": [SceneEntityCfg(name) for name in ACTIVE_SHOES],
-            "min_up_y": 0.7,
+            "min_up_z": 0.7,
         },
     )
+
 
 
 # ---------------------------------------------------------------------------
@@ -179,16 +207,20 @@ class AdvancedEnvCfg(SingleArmFrankaTaskEnvCfg):
         parse_usd_and_create_subassets(ADVANCED_USD_PATH, self)
 
         # domain randomization 自動只對 active 鞋子生效
-        domain_randomization(
-            self,
-            random_options=[
-                randomize_object_uniform(
-                    name,
-                    pose_range={"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
-                )
-                for name in ACTIVE_SHOES
-            ],
-        )
+        for shoe_name in ACTIVE_SHOES:
+            setattr(
+                self.events,
+                f"reset_{shoe_name}_sideways",
+                EventTermCfg(
+                    func=_randomize_shoe_sideways,
+                    mode="reset",
+                    params={
+                        "asset_cfg": SceneEntityCfg(shoe_name),
+                        "center_pos": _SHOE_ACTIVE_POS[shoe_name],
+                        "pos_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03)},
+                    },
+                ),
+            )
 
 
 TASK_ID = "Private-Advanced-Eval-v0"
