@@ -30,7 +30,7 @@ ADVANCED_OBJECTS_ROOT = ASSETS_ROOT / "scenes" / "advanced" / "objects"
 # 可用名稱: "Sneaker" | "Blue_Sneaker" | "Worn_Rieker_Leather_Shoe"
 # ---------------------------------------------------------------------------
 ACTIVE_SHOES: tuple[str, ...] = (
-    "Sneaker",
+    "_12xSneaker",
     # "Blue_Sneaker",
     # "Worn_Rieker_Leather_Shoe",
 )
@@ -38,31 +38,32 @@ ACTIVE_SHOES: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 # 常數
 # ---------------------------------------------------------------------------
-TAG_TO_OBJECT: dict[int, str] = {2: "Sneaker", 3: "Blue_Sneaker", 4: "Worn_Rieker_Leather_Shoe"}
+TAG_TO_OBJECT: dict[int, str] = {2: "_12xSneaker", 3: "Blue_Sneaker", 4: "Worn_Rieker_Leather_Shoe"}
 ANCHOR_TAG_ID: int = 0
 ANCHOR_WORLD_POSE: tuple[float, float, float] = (0.0, 0.0, 0.0)
 OBJECT_Z: float = 0.12
 OBJECT_ROLL: float = 0.0
 OBJECT_PITCH: float = 0.0
 PER_OBJECT_YAW_OFFSET: dict[str, float] = {
-    "Sneaker": 0.0,
+    "_12xSneaker": 0.0,
     "Blue_Sneaker": 0.0,
     "Worn_Rieker_Leather_Shoe": 0.0,
 }
 
 # 各鞋子的起始中心位置（側倒）
 _SHOE_ACTIVE_POS: dict[str, tuple[float, float, float]] = {
-    "Sneaker":                  (0.36, -0.21, 0.1),
+    "_12xSneaker":              (0.36, -0.21, 0.1),
     "Blue_Sneaker":             (0.55, -0.10, 0.1),
     "Worn_Rieker_Leather_Shoe": (0.65, -0.10, 0.1),
 }
  
-_Q_LEFT_SIDEWAY: tuple[float, float, float, float]  = (0.5,  0.5,  0.5, -0.5)
-_Q_RIGHT_SIDEWAY: tuple[float, float, float, float] = (0.5,  0.5, -0.5,  0.5)
- 
+_S = math.sqrt(2.0) / 2.0
+_Q_1: tuple[float, float, float, float] = (_S, 0.0, _S, 0.0)
+_Q_2: tuple[float, float, float, float] = (0.0, _S, 0.0, _S)
+_Q_3: tuple[float, float, float, float] = (_S, 0.0, -_S, 0.0)
+_Q_4: tuple[float, float, float, float] = (0.0, _S, 0.0, -_S)
  
 configure_seed(42)
-
 
 # ---------------------------------------------------------------------------
 # 自訂 reset event（與 env_cfg 共用相同邏輯）
@@ -86,14 +87,14 @@ def _randomize_shoe_sideways(
             pos[:, dim] += torch.rand(n, device=env.device) * (hi - lo) + lo
     pos = pos + env.scene.env_origins[env_ids]
  
-    # ── 姿態：隨機選 +90° 或 -90° 繞 Y ───────────────────────────────────
-    q_left = torch.tensor(_Q_LEFT_SIDEWAY, device=env.device, dtype=torch.float32)
-    q_right = torch.tensor(_Q_RIGHT_SIDEWAY, device=env.device, dtype=torch.float32)
-    choose_left = (torch.rand(n, device=env.device) > 0.5).unsqueeze(1).expand(n, 4)
-    rot = torch.where(choose_left,
-                      q_left.unsqueeze(0).expand(n, -1),
-                      q_right.unsqueeze(0).expand(n, -1)).contiguous()
- 
+    # 姿態：4 種隨機選 1
+    qs = torch.tensor(
+        [_Q_1, _Q_2, _Q_3, _Q_4],
+        device=env.device, dtype=torch.float32,
+    )  # (4, 4)
+    idx = torch.randint(0, 4, (n,), device=env.device)
+    rot = qs[idx]  # (N, 4)
+
     pose = torch.cat([pos, rot], dim=-1)
     asset.write_root_pose_to_sim(pose, env_ids=env_ids)
 
@@ -124,11 +125,11 @@ def _build_scene_cfg() -> type:
             prim_path=f"{{ENV_REGEX_NS}}/Scene/{name}",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=str(ADVANCED_OBJECTS_ROOT / "Shoes" / f"{name}.usd"),
-                mass_props=MassPropertiesCfg(mass=0.1),
+                mass_props=MassPropertiesCfg(mass=0.15),
             ),
             init_state=RigidObjectCfg.InitialStateCfg(
                 pos=_SHOE_ACTIVE_POS[name],
-                rot=_Q_LEFT_SIDEWAY,   # 第一幀預設左倒；reset 後由 event 覆蓋
+                rot=_Q_1,
             ),
         )
         attrs["__annotations__"][name] = RigidObjectCfg
@@ -217,7 +218,7 @@ class AdvancedEnvCfg(SingleArmFrankaTaskEnvCfg):
                     params={
                         "asset_cfg": SceneEntityCfg(shoe_name),
                         "center_pos": _SHOE_ACTIVE_POS[shoe_name],
-                        "pos_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03)},
+                        "pos_range": {"x": (-0.1, 0.1), "y": (-0.03, 0.03)},
                     },
                 ),
             )

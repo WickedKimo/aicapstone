@@ -29,7 +29,7 @@ ADVANCED_OBJECTS_ROOT = ASSETS_ROOT / "scenes" / "advanced" / "objects"
 # 可用名稱: "Sneaker" | "Blue_Sneaker" | "Worn_Rieker_Leather_Shoe"
 # ---------------------------------------------------------------------------
 ACTIVE_SHOES: tuple[str, ...] = (
-    "Sneaker",
+    "_12xSneaker",
     # "Blue_Sneaker",
     # "Worn_Rieker_Leather_Shoe",
 )
@@ -38,7 +38,7 @@ ACTIVE_SHOES: tuple[str, ...] = (
 # AprilTag → 物件名稱對應（只保留 ACTIVE_SHOES 的鞋子）
 # ---------------------------------------------------------------------------
 _ALL_TAG_TO_OBJECT: dict[int, str] = {
-    2: "Sneaker",
+    2: "_12xSneaker",
     3: "Blue_Sneaker",
     4: "Worn_Rieker_Leather_Shoe",
 }
@@ -60,7 +60,7 @@ OBJECT_PITCH: float = 0.0
 # 各鞋子 USD 的 yaw 修正值（rad）；使 spawn 後的視覺朝向與 gripper 座標系一致。
 # 每個 USD 只需調整一次，有需要時再填。
 PER_OBJECT_YAW_OFFSET: dict[str, float] = {
-    "Sneaker":                  0.0,
+    "_12xSneaker":              0.0,
     "Blue_Sneaker":             0.0,
     "Worn_Rieker_Leather_Shoe": 0.0,
 }
@@ -75,14 +75,17 @@ IGNORED_OBJECT_NAMES: tuple[str, ...] = tuple(
 # 各鞋子的模擬起始中心位置與兩種側倒姿態
 # ---------------------------------------------------------------------------
 _SHOE_BASE_POS: dict[str, tuple[float, float, float]] = {
-    "Sneaker":                  (0.35, -0.21, 0.1),
+    "_12xSneaker":              (0.35, -0.25, 0.1),
     "Blue_Sneaker":             (0.55, -0.10, 0.1),
     "Worn_Rieker_Leather_Shoe": (0.65, -0.10, 0.1),
 }
- 
-_Q_LEFT_SIDEWAY: tuple[float, float, float, float]  = (0.5,  0.5,  0.5, -0.5)
-_Q_RIGHT_SIDEWAY: tuple[float, float, float, float] = (0.5,  0.5, -0.5,  0.5)
- 
+
+_S = math.sqrt(2.0) / 2.0
+_Q_1: tuple[float, float, float, float] = (_S, 0.0, _S, 0.0)
+_Q_2: tuple[float, float, float, float] = (0.0, _S, 0.0, _S)
+_Q_3: tuple[float, float, float, float] = (_S, 0.0, -_S, 0.0)
+_Q_4: tuple[float, float, float, float] = (0.0, _S, 0.0, -_S)
+
  
 # ---------------------------------------------------------------------------
 # 自訂 reset event：每個 episode 隨機選左倒或右倒，位置加小 offset
@@ -112,15 +115,15 @@ def _randomize_shoe_sideways(
     # 加上各環境的 origin offset（multi-env 相容）
     pos = pos + env.scene.env_origins[env_ids]
  
-    # ── 姿態：隨機選 +90° 或 -90° 繞 Y ───────────────────────────────────
-    q_left = torch.tensor(_Q_LEFT_SIDEWAY, device=env.device, dtype=torch.float32)
-    q_right = torch.tensor(_Q_RIGHT_SIDEWAY, device=env.device, dtype=torch.float32)
-    choose_left = (torch.rand(n, device=env.device) > 0.5).unsqueeze(1).expand(n, 4)
-    rot = torch.where(choose_left,
-                      q_left.unsqueeze(0).expand(n, -1),
-                      q_right.unsqueeze(0).expand(n, -1)).contiguous()
- 
-    pose = torch.cat([pos, rot], dim=-1)  # (N, 7)  pos(3) + quat wxyz(4)
+    # 姿態：4 種隨機選 1
+    qs = torch.tensor(
+        [_Q_1, _Q_2, _Q_3, _Q_4],
+        device=env.device, dtype=torch.float32,
+    )  # (4, 4)
+    idx = torch.randint(0, 4, (n,), device=env.device)
+    rot = qs[idx]  # (N, 4)
+
+    pose = torch.cat([pos, rot], dim=-1)
     asset.write_root_pose_to_sim(pose, env_ids=env_ids)
  
 
@@ -137,12 +140,12 @@ def _build_scene_cfg() -> type:
             prim_path=f"{{ENV_REGEX_NS}}/Scene/{name}",
             spawn=sim_utils.UsdFileCfg(
                 usd_path=str(ADVANCED_OBJECTS_ROOT / "Shoes" / f"{name}.usd"),
-                mass_props=MassPropertiesCfg(mass=0.1),
+                mass_props=MassPropertiesCfg(mass=0.15),
             ),
             # 預設用「左倒」作為第一幀佔位；每次 reset 後由 event 覆蓋
             init_state=RigidObjectCfg.InitialStateCfg(
                 pos=_SHOE_BASE_POS[name],
-                rot=_Q_LEFT_SIDEWAY,
+                rot=_Q_1,
             ),
         )
         attrs["__annotations__"][name] = RigidObjectCfg
@@ -229,7 +232,7 @@ class AdvancedEnvCfg(SingleArmFrankaTaskEnvCfg):
                     params={
                         "asset_cfg": SceneEntityCfg(shoe_name),
                         "center_pos": _SHOE_BASE_POS[shoe_name],
-                        "pos_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03)},
+                        "pos_range": {"x": (-0.1, 0.1), "y": (-0.03, 0.03)},
                     },
                 ),
             )
