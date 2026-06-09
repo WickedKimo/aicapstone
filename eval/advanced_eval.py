@@ -52,7 +52,7 @@ PER_OBJECT_YAW_OFFSET: dict[str, float] = {
 
 # 各鞋子的起始中心位置（側倒）
 _SHOE_ACTIVE_POS: dict[str, tuple[float, float, float]] = {
-    "_12xSneaker":              (0.36, -0.21, 0.1),
+    "_12xSneaker":              (0.35, -0.25, 0.1),
     "Blue_Sneaker":             (0.55, -0.10, 0.1),
     "Worn_Rieker_Leather_Shoe": (0.65, -0.10, 0.1),
 }
