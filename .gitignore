@@ -38,3 +38,6 @@ datasets/*
 # Private external task files
 private_tasks/*
 !private_tasks/.gitkeep
+
+advanced_policy_v1/
+advanced_policy_v2/

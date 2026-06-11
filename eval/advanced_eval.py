@@ -151,13 +151,34 @@ def shoes_upright(
     shoe_cfgs: list[SceneEntityCfg],
     min_up_z: float,
 ) -> torch.Tensor:
-    done = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+    done = torch.ones(
+        env.num_envs,
+        dtype=torch.bool,
+        device=env.device,
+    )
+
     for cfg in shoe_cfgs:
         obj: RigidObject = env.scene[cfg.name]
         q = obj.data.root_quat_w
-        w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-        up_z = 1.0 - 2.0 * (x * x + y * y)   # R[2,2] = world-Z of local +Z
-        done = torch.logical_and(done, up_z >= min_up_z)
+
+        # Isaac Lab quaternion: w, x, y, z
+        w, x, y, z = q.unbind(dim=-1)
+
+        # local +Y 在 world +Z 上的投影
+        up_z = 2.0 * (y * z + w * x)
+
+        shoe_success = up_z >= min_up_z
+        done &= shoe_success
+
+        if env.num_envs == 1:
+            print(
+                f"{cfg.name} "
+                f"quat: {q[0].detach().cpu().tolist()} "
+                f"up_z: {up_z[0].item()} "
+                f"success: {shoe_success[0].item()}"
+            )
+
+    print("final success:", done[0].item())
     return done
  
  
@@ -167,7 +188,7 @@ class TerminationsCfg(SingleArmFrankaTerminationsCfg):
         func=shoes_upright,
         params={
             "shoe_cfgs": [SceneEntityCfg(name) for name in ACTIVE_SHOES],
-            "min_up_z": 0.7,
+            "min_up_z": 0.95,
         },
     )
 
